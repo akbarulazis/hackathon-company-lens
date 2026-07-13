@@ -617,16 +617,7 @@ async def import_portfolio(
             raw_metrics = _build_sparse_metrics(row, metric_columns)
 
             # Try to get a fuzzy match score for potential suggestion
-            # Store as unmatched suggestion (skip expensive fuzzy query for speed)
-            suggestion = PortfolioSuggestion(
-                raw_name=company_name,
-                matched_company_id=None,
-                similarity_score=None,
-                status="pending",
-                as_of_date=as_of_date,
-                raw_metrics=raw_metrics if raw_metrics else None,
-            )
-            session.add(suggestion)
+            # Count as unmatched (don't store individual suggestion records for large imports)
             unmatched_count += 1
 
     await session.flush()
