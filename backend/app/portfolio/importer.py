@@ -434,7 +434,8 @@ async def _create_group_member_edges(
 def _get_company_name_column(headers: list[str]) -> str | None:
     """Identify the company name column from headers.
 
-    Looks for known name column variants.
+    Looks for known name column variants. Also does partial matching
+    for common patterns like 'customer_name', 'client_name', etc.
 
     Args:
         headers: List of column headers.
@@ -442,18 +443,39 @@ def _get_company_name_column(headers: list[str]) -> str | None:
     Returns:
         The header name for the company name column, or None.
     """
+    # Exact matches first
     name_variants = [
         "nama_nasabah",
         "nama",
         "name",
         "company_name",
+        "company",
         "cif_name",
+        "customer_name",
+        "customer",
+        "client_name",
+        "client",
+        "nasabah",
+        "perusahaan",
+        "nama_perusahaan",
+        "nama_customer",
+        "nama_debitur",
+        "debitur",
     ]
     headers_lower = {h.strip().lower(): h for h in headers}
 
     for variant in name_variants:
         if variant in headers_lower:
             return headers_lower[variant]
+
+    # Partial match: find any column containing "nama" or "name" or "customer" or "company"
+    for h_lower, h_original in headers_lower.items():
+        if any(keyword in h_lower for keyword in ["nama", "name", "customer", "company", "nasabah", "debitur"]):
+            return h_original
+
+    # Last resort: use the first column (often the name column in simple spreadsheets)
+    if headers:
+        return headers[0]
 
     return None
 

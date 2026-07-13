@@ -38,24 +38,28 @@ export default function ComparePage({ params }: { params: { id: string } }) {
     queryFn: () => get<WorkspaceDetail>(`/workspaces/${workspaceId}`),
   });
 
-  // Fetch past reports
-  const { data: reports } = useQuery<ComparisonReport[]>({
-    queryKey: ["comparison-reports", workspaceId],
-    queryFn: async () => {
-      // The API returns individual reports; fetch the active one if we have an ID
-      if (!activeReportId) return [];
-      const report = await get<ComparisonReport>(`/workspaces/${workspaceId}/reports/${activeReportId}`);
-      return [report];
-    },
-    enabled: !!activeReportId,
-    refetchInterval: activeReportId ? 5000 : false, // Poll every 5s while waiting
+  // Fetch past reports (persisted in DB — survives page refresh)
+  const { data: pastReports } = useQuery<ComparisonReport[]>({
+    queryKey: ["comparison-reports-list", workspaceId],
+    queryFn: () => get<ComparisonReport[]>(`/workspaces/${workspaceId}/reports`),
   });
 
-  // Get active report
-  const activeReport = reports?.find((r) => r.id === activeReportId);
+  // Fetch active report (polling while waiting for result)
+  const { data: activeReportData } = useQuery<ComparisonReport>({
+    queryKey: ["comparison-report", workspaceId, activeReportId],
+    queryFn: () => get<ComparisonReport>(`/workspaces/${workspaceId}/reports/${activeReportId}`),
+    enabled: !!activeReportId,
+    refetchInterval: activeReportId ? 5000 : false,
+  });
 
-  // Stop polling once we have html_content
-  const shouldPoll = activeReportId && (!activeReport || !activeReport.html_content);
+  // Use active polling result or find from past reports
+  const activeReport = activeReportData ?? pastReports?.find((r) => r.id === activeReportId);
+
+  // Stop polling once we have html_content — also refetch the list
+  if (activeReport?.html_content && activeReportId) {
+    // Report is ready — clear active and refetch list
+    queryClient.invalidateQueries({ queryKey: ["comparison-reports-list", workspaceId] });
+  }
 
   // Initiate comparison
   const compareMutation = useMutation({
@@ -159,7 +163,7 @@ export default function ComparePage({ params }: { params: { id: string } }) {
       {activeReport?.html_content && (
         <div className="bg-base-100 rounded-xl border border-base-300 p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-[15px] font-medium">Comparison Report</h2>
+            <h2 className="text-[15px] font-medium">Latest Comparison</h2>
             <div className="flex items-center gap-2">
               {activeReport.is_fallback && (
                 <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ backgroundColor: "#fef3c7", color: "#92400e" }}>Fallback</span>
@@ -173,6 +177,32 @@ export default function ComparePage({ params }: { params: { id: string } }) {
             className="prose prose-sm max-w-none"
             dangerouslySetInnerHTML={{ __html: activeReport.html_content }}
           />
+        </div>
+      )}
+
+      {/* Past Reports (from DB — persists across page refreshes) */}
+      {pastReports && pastReports.length > 0 && (
+        <div className="space-y-4">
+          <h2 className="text-[15px] font-medium">Past Comparisons</h2>
+          {pastReports.filter(r => r.html_content && r.id !== activeReportId).map((report) => (
+            <details key={report.id} className="bg-base-100 rounded-xl border border-base-300">
+              <summary className="p-4 cursor-pointer flex items-center justify-between">
+                <span className="text-[14px] font-medium">
+                  Comparison #{report.id}
+                </span>
+                <span className="text-[11px]" style={{ color: "#9c9fa5" }}>
+                  {new Date(report.created_at).toLocaleString()}
+                  {report.is_fallback && " (fallback)"}
+                </span>
+              </summary>
+              <div className="px-6 pb-6">
+                <div
+                  className="prose prose-sm max-w-none"
+                  dangerouslySetInnerHTML={{ __html: report.html_content! }}
+                />
+              </div>
+            </details>
+          ))}
         </div>
       )}
     </div>

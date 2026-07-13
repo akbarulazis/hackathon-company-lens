@@ -83,6 +83,32 @@ async def initiate_comparison(
 
 
 @router.get(
+    "/{workspace_id}/reports",
+    response_model=list[ComparisonReportResponse],
+)
+async def list_comparison_reports(
+    workspace_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> list[ComparisonReportResponse]:
+    """List all comparison reports for a workspace (newest first)."""
+    result = await session.execute(
+        select(Workspace).where(Workspace.id == workspace_id, Workspace.user_id == current_user.id)
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+
+    result = await session.execute(
+        select(ComparisonReport)
+        .where(ComparisonReport.workspace_id == workspace_id)
+        .order_by(ComparisonReport.created_at.desc())
+        .limit(10)
+    )
+    reports = list(result.scalars().all())
+    return [ComparisonReportResponse.model_validate(r) for r in reports]
+
+
+@router.get(
     "/{workspace_id}/reports/{report_id}",
     response_model=ComparisonReportResponse,
 )
