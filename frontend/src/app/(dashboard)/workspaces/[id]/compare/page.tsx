@@ -69,6 +69,8 @@ export default function ComparePage({
     onSuccess: (data) => {
       setReportId(data.report_id);
       setIsComparing(true);
+      // Notify the navbar layout about comparison in progress
+      window.dispatchEvent(new Event("comparison-started"));
     },
     onError: () => {
       setIsComparing(false);

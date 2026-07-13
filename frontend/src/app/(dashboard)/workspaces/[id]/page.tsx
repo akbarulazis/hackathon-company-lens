@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import ChatSidebar from "@/components/ChatSidebar";
 import {
   useWorkspaceDetail,
   useWorkspaceAnalytics,
@@ -394,6 +395,7 @@ export default function WorkspaceDetailPage({
   const removeMutation = useRemoveCompanyFromWorkspace(workspaceId);
   const addMutation = useAddCompanyToWorkspace(workspaceId);
   const [removingId, setRemovingId] = useState<number | null>(null);
+  const [showChat, setShowChat] = useState(false);
   const [companyName, setCompanyName] = useState("");
   const [isResearching, setIsResearching] = useState(false);
   const [researchMsg, setResearchMsg] = useState<string | null>(null);
@@ -441,7 +443,9 @@ export default function WorkspaceDetailPage({
         } catch {
           // May fail if limit reached or already there
         }
-        setResearchMsg(`Research started for "${searchTerm}". Watch the progress below.`);
+        setResearchMsg(`Research started for "${searchTerm}". Watch progress in the navbar.`);
+        // Notify navbar about research in progress
+        window.dispatchEvent(new CustomEvent("research-started", { detail: { name: searchTerm, id: res.id } }));
       }
 
       setCompanyName("");
@@ -474,8 +478,11 @@ export default function WorkspaceDetailPage({
   const readyCompanies = workspace.companies.filter((c) => c.status === "ready");
   const hasComparisonData = analytics && analytics.companies.length >= 2;
 
+
   return (
-    <div className="p-6 md:p-8 space-y-8">
+    <div className="flex h-[calc(100vh-48px)]">
+      {/* Main Content */}
+      <div className="flex-1 overflow-y-auto p-6 md:p-8 space-y-8">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -618,6 +625,23 @@ export default function WorkspaceDetailPage({
             <ComparisonRadarChart companies={analytics.companies} />
           </div>
         </section>
+      )}
+      </div>
+
+      {/* Chat Toggle Button */}
+      <button
+        onClick={() => setShowChat(!showChat)}
+        className="fixed bottom-6 right-6 w-12 h-12 rounded-full bg-primary text-primary-content shadow-lg flex items-center justify-center hover:bg-black transition-colors z-30"
+        title="Toggle AI Chat"
+      >
+        {showChat ? "✕" : "💬"}
+      </button>
+
+      {/* Chat Sidebar */}
+      {showChat && (
+        <div className="w-[360px] border-l border-base-300 bg-base-100 flex-shrink-0 hidden lg:flex flex-col">
+          <ChatSidebar workspaceId={String(workspaceId)} />
+        </div>
       )}
     </div>
   );

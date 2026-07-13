@@ -640,6 +640,24 @@ async def run_pipeline(
         relationships = await extract_relationships(company_name, brief, settings)
         await _persist_relationships(session, company, relationships)
 
+        # --- Step 7: Generate Embeddings for RAG ---
+        try:
+            from app.chatbot.embeddings import chunk_text, generate_embeddings, store_chunks
+            chunks = chunk_text(brief, chunk_size=1000, overlap=200)
+            if chunks:
+                embeddings = await generate_embeddings(chunks, settings)
+                await store_chunks(
+                    session=session,
+                    company_id=company.id,
+                    texts=chunks,
+                    embeddings=embeddings,
+                    source_type="research",
+                )
+                logger.info("Generated %d embeddings for company_id=%d", len(chunks), company.id)
+        except Exception as embed_err:
+            # Embedding failure should not fail the pipeline
+            logger.warning("Embedding generation failed for company_id=%d: %s", company.id, embed_err)
+
         # --- Success: status → ready ---
         await _update_company_status(session, company, CompanyStatus.ready)
         await _publish_status(

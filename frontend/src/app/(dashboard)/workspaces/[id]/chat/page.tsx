@@ -166,11 +166,33 @@ export default function ChatPage({
       <div className="flex-1 overflow-y-auto bg-base-200 rounded-lg p-4 space-y-4 min-h-0">
         {messages.length === 0 && !isStreaming && (
           <div className="flex items-center justify-center h-full text-base-content/50">
-            <div className="text-center">
-              <p className="text-lg font-medium">No messages yet</p>
-              <p className="text-sm mt-1">
-                Ask a question about the companies in this workspace.
+            <div className="text-center max-w-md">
+              <p className="text-lg font-medium mb-2">Start a conversation</p>
+              <p className="text-sm mb-6">
+                Ask questions about companies in this workspace, or try one of these:
               </p>
+              <div className="grid gap-2 text-left">
+                {[
+                  "Which company has the strongest financial position?",
+                  "Compare the risk profiles of all companies",
+                  "What banking products would fit each company?",
+                  "Which company should we pursue first and why?",
+                  "Summarize the key revenue opportunities across all companies",
+                  "What are the main risks we should watch for?",
+                ].map((q) => (
+                  <button
+                    key={q}
+                    className="text-left px-4 py-2.5 rounded-lg border border-base-300 bg-base-100 text-sm text-base-content hover:border-primary/40 hover:bg-base-200 transition-colors"
+                    onClick={() => {
+                      setInput(q);
+                      // Auto-submit
+                      sendMutation.mutate(q);
+                    }}
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         )}

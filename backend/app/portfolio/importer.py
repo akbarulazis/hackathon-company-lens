@@ -140,17 +140,49 @@ def parse_column_name(column_name: str) -> dict:
 
 
 def parse_portfolio_file(
-    content: str | bytes, delimiter: str = ","
+    content: str | bytes, delimiter: str = ",", filename: str = ""
 ) -> tuple[list[str], list[dict]]:
-    """Parse a CSV/TSV portfolio file into headers and rows.
+    """Parse a CSV/TSV/Excel portfolio file into headers and rows.
 
     Args:
         content: Raw file content as string or bytes.
         delimiter: Column delimiter (',' for CSV, '\\t' for TSV).
+        filename: Original filename (used to detect Excel format).
 
     Returns:
         Tuple of (headers list, rows as list of dicts).
     """
+    # Handle Excel files
+    if filename.lower().endswith((".xlsx", ".xls")):
+        import openpyxl
+        from io import BytesIO
+
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+
+        wb = openpyxl.load_workbook(BytesIO(content), read_only=True, data_only=True)
+        ws = wb.active
+        if ws is None:
+            return [], []
+
+        rows_iter = ws.iter_rows(values_only=True)
+        header_row = next(rows_iter, None)
+        if not header_row:
+            return [], []
+
+        headers = [str(cell) if cell is not None else "" for cell in header_row]
+        rows = []
+        for row in rows_iter:
+            row_dict = {}
+            for i, cell in enumerate(row):
+                if i < len(headers):
+                    row_dict[headers[i]] = str(cell) if cell is not None else ""
+            rows.append(row_dict)
+
+        wb.close()
+        return headers, rows
+
+    # Handle CSV/TSV
     if isinstance(content, bytes):
         content = content.decode("utf-8-sig")  # Handle BOM
 
@@ -451,6 +483,7 @@ async def import_portfolio(
     file_content: str | bytes,
     delimiter: str = ",",
     as_of_date: date | None = None,
+    filename: str = "",
 ) -> dict:
     """Import a portfolio file into the system.
 
@@ -478,7 +511,7 @@ async def import_portfolio(
         as_of_date = date.today()
 
     # Step 1: Parse file
-    headers, rows = parse_portfolio_file(file_content, delimiter)
+    headers, rows = parse_portfolio_file(file_content, delimiter, filename=filename)
 
     if not headers or not rows:
         return {"matched": 0, "unmatched": 0, "total": 0, "errors": []}

@@ -59,6 +59,7 @@ async def import_file(
         file_content=file_content,
         delimiter=delimiter,
         as_of_date=as_of_date,
+        filename=filename,
     )
     return result
 

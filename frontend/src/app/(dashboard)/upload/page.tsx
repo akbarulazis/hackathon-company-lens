@@ -59,12 +59,12 @@ export default function UploadPage() {
           <input
             ref={fileRef}
             type="file"
-            accept=".csv,.tsv"
+            accept=".csv,.tsv,.xlsx,.xls"
             onChange={(e) => setFile(e.target.files?.[0] || null)}
             className="file-input file-input-bordered w-full"
           />
           <p className="text-[12px] mt-1" style={{ color: "#9c9fa5" }}>
-            Accepted: .csv, .tsv files with column convention (division_product_subproduct_metric)
+            Accepted: .csv, .tsv, .xlsx, .xls — with column convention (division_product_subproduct_metric)
           </p>
         </div>
 

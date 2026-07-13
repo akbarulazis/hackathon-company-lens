@@ -187,7 +187,7 @@ async def execute_comparison(
         html_content = await llm_client.generate(
             prompt=user_prompt,
             system_prompt=system_prompt,
-            max_tokens=8192,
+            max_tokens=4000,
         )
 
         report.html_content = html_content

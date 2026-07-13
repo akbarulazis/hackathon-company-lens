@@ -64,10 +64,10 @@ async def upload_portfolio(
     filename = file.filename or ""
 
     # Validate file extension
-    if not filename.lower().endswith((".csv", ".tsv")):
+    if not filename.lower().endswith((".csv", ".tsv", ".xlsx", ".xls")):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File must be a CSV (.csv) or TSV (.tsv) file",
+            detail="File must be CSV (.csv), TSV (.tsv), or Excel (.xlsx/.xls)",
         )
 
     # Read file content

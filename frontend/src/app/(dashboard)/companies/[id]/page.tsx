@@ -9,6 +9,7 @@ import FinancialsTab from "@/components/dossier/FinancialsTab";
 import ScoresTab from "@/components/dossier/ScoresTab";
 import DocumentUpload from "@/components/dossier/DocumentUpload";
 import RelationshipGraph from "@/components/graph/RelationshipGraph";
+import ChatSidebar from "@/components/ChatSidebar";
 
 // --- Types ---
 

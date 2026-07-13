@@ -61,8 +61,8 @@ def build_comparison_prompt(companies: list[Any]) -> str:
 
         # Include acquisition brief if available
         if company.acquisition_brief:
-            # Truncate to keep prompt manageable
-            brief = company.acquisition_brief[:5000]
+            # Truncate to keep prompt manageable and comparison fast
+            brief = company.acquisition_brief[:2000]
             section += f"\nAcquisition Brief (excerpt):\n{brief}\n"
 
         company_sections.append(section)
