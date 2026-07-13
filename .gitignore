@@ -1,0 +1,48 @@
+# === Environment & Secrets ===
+.env
+.env.local
+.env.production
+*.env
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+.hypothesis/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# === Node.js ===
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# === Docker ===
+postgres_data/
+
+# === Uploads ===
+uploads/
+
+# === Kiro ===
+.kiro/
