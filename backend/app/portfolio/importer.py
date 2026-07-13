@@ -562,6 +562,14 @@ async def import_portfolio(
     ]
 
     # Step 3: Process each row
+    # Optimization: pre-load all company names for in-memory matching
+    all_companies_result = await session.execute(
+        select(CompanyProfile.id, CompanyProfile.name)
+    )
+    company_lookup: dict[str, int] = {}
+    for cid, cname in all_companies_result.all():
+        company_lookup[cname.strip().lower()] = cid
+
     matched_count = 0
     unmatched_count = 0
     errors: list[str] = []
@@ -571,8 +579,13 @@ async def import_portfolio(
         if not company_name:
             continue
 
-        # Reconcile company name
-        company = await reconcile_company_name(session, company_name)
+        # Fast in-memory exact match first (no DB query per row)
+        normalized = company_name.strip().lower()
+        matched_id = company_lookup.get(normalized)
+
+        company = None
+        if matched_id:
+            company = await session.get(CompanyProfile, matched_id)
 
         if company:
             # Build sparse metrics (skip zeros)
@@ -604,34 +617,11 @@ async def import_portfolio(
             raw_metrics = _build_sparse_metrics(row, metric_columns)
 
             # Try to get a fuzzy match score for potential suggestion
-            similarity_score = None
-            suggested_company_id = None
-
-            # Check if there's a weak fuzzy match (below 0.7 threshold)
-            normalized = company_name.strip().lower()
-            try:
-                stmt = (
-                    select(
-                        CompanyProfile.id,
-                        text("similarity(lower(name), :search_name) as sim_score"),
-                    )
-                    .where(text("similarity(lower(name), :search_name) > 0.3"))
-                    .order_by(text("sim_score DESC"))
-                    .limit(1)
-                )
-                result = await session.execute(stmt, {"search_name": normalized})
-                suggestion_row = result.fetchone()
-                if suggestion_row:
-                    suggested_company_id = suggestion_row[0]
-                    similarity_score = float(suggestion_row[1])
-            except Exception:
-                # If pg_trgm is not available, just leave suggestion empty
-                pass
-
+            # Store as unmatched suggestion (skip expensive fuzzy query for speed)
             suggestion = PortfolioSuggestion(
                 raw_name=company_name,
-                matched_company_id=suggested_company_id,
-                similarity_score=similarity_score,
+                matched_company_id=None,
+                similarity_score=None,
                 status="pending",
                 as_of_date=as_of_date,
                 raw_metrics=raw_metrics if raw_metrics else None,
