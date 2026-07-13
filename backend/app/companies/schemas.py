@@ -64,7 +64,7 @@ class CompanyDetailResponse(BaseModel):
     overall_insight: str | None = None
     revenue_projection: dict | None = None
     client_since: date | None = None
-    products_held: dict | None = None
+    products_held: list | dict | None = None
     created_at: datetime
     updated_at: datetime
 
