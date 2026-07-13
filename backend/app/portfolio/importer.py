@@ -252,18 +252,23 @@ async def reconcile_company_name(
 
     # Step 3: Fuzzy pg_trgm match
     # Uses PostgreSQL similarity() function with threshold 0.7
-    stmt = (
-        select(CompanyProfile)
-        .where(
-            text("similarity(lower(name), :search_name) > 0.7")
+    # Wrapped in try/except to handle slow queries gracefully
+    try:
+        stmt = (
+            select(CompanyProfile)
+            .where(
+                text("similarity(lower(name), :search_name) > 0.7")
+            )
+            .order_by(text("similarity(lower(name), :search_name) DESC"))
+            .limit(1)
         )
-        .order_by(text("similarity(lower(name), :search_name) DESC"))
-        .limit(1)
-    )
-    result = await session.execute(stmt, {"search_name": normalized_name})
-    match = result.scalar_one_or_none()
-    if match:
-        return match
+        result = await session.execute(stmt, {"search_name": normalized_name})
+        match = result.scalar_one_or_none()
+        if match:
+            return match
+    except Exception:
+        # If pg_trgm query fails or times out, skip fuzzy matching
+        pass
 
     return None
 
