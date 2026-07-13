@@ -1,265 +1,283 @@
-# Deploy Company Lens to AWS (ap-southeast-3 Jakarta)
+# AWS Deployment Guide — Company Lens
+
+Region: **ap-southeast-3 (Jakarta)** — WAJIB
 
 ## Architecture
 
 ```
-                    ┌─────────────────┐
-                    │   CloudFront    │ (optional CDN)
-                    └────────┬────────┘
-                             │
-                    ┌────────▼────────┐
-                    │  EC2 Instance   │ (t3.small)
-                    │  ┌───────────┐  │
-                    │  │  Nginx    │  │ → Frontend (Next.js) + Backend (FastAPI)
-                    │  │  Backend  │  │
-                    │  │  Worker   │  │
-                    │  │  Frontend │  │
-                    │  └───────────┘  │
-                    └────────┬────────┘
-                             │
-              ┌──────────────┼──────────────┐
-              │              │              │
-    ┌─────────▼──────┐  ┌───▼───┐  ┌──────▼─────┐
-    │ RDS PostgreSQL │  │ Redis │  │    S3      │
-    │ (db.t3.micro)  │  │(cache)│  │ (uploads)  │
-    └────────────────┘  └───────┘  └────────────┘
+Internet → ALB (Application Load Balancer)
+              ├── /api/* → ECS Backend (FastAPI + ARQ Worker)
+              └── /* → ECS Frontend (Next.js)
+              
+Backend → RDS PostgreSQL (pgvector)
+       → ElastiCache Redis
 ```
 
-## Estimated Cost (per month)
+## Step-by-Step Deployment
 
-| Service | Spec | Cost |
-|---------|------|------|
-| EC2 | t3.small (2 vCPU, 2GB) | ~$15/mo |
-| RDS PostgreSQL | db.t3.micro (1 vCPU, 1GB) | ~$12/mo |
-| ElastiCache Redis | cache.t3.micro | ~$12/mo |
-| EBS | 20GB gp3 | ~$2/mo |
-| Data Transfer | ~10GB | ~$1/mo |
-| **Total** | | **~$42/mo** |
-
-Well within your $1,000 budget for the hackathon period.
+### Prerequisites
+- AWS CLI installed and configured with your IAM credentials
+- Docker installed locally
+- AWS account activated (region: ap-southeast-3)
 
 ---
 
-## Step 1: Configure AWS CLI
+### Step 1: Create ECR Repositories
 
 ```bash
-aws configure
+aws ecr create-repository --repository-name company-lens-backend --region ap-southeast-3
+aws ecr create-repository --repository-name company-lens-frontend --region ap-southeast-3
 ```
 
-Enter:
-- AWS Access Key ID: (from your IAM user)
-- AWS Secret Access Key: (from your IAM user)
-- Default region: `ap-southeast-3`
-- Default output: `json`
-
----
-
-## Step 2: Create Security Group
+### Step 2: Build & Push Docker Images
 
 ```bash
-# Create VPC security group
-aws ec2 create-security-group \
-  --group-name company-lens-sg \
-  --description "Company Lens hackathon" \
+# Login to ECR
+aws ecr get-login-password --region ap-southeast-3 | docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.ap-southeast-3.amazonaws.com
+
+# Build backend
+docker build -f Dockerfile.backend -t company-lens-backend .
+docker tag company-lens-backend:latest <ACCOUNT_ID>.dkr.ecr.ap-southeast-3.amazonaws.com/company-lens-backend:latest
+docker push <ACCOUNT_ID>.dkr.ecr.ap-southeast-3.amazonaws.com/company-lens-backend:latest
+
+# Build frontend
+docker build -f Dockerfile.frontend -t company-lens-frontend .
+docker tag company-lens-frontend:latest <ACCOUNT_ID>.dkr.ecr.ap-southeast-3.amazonaws.com/company-lens-frontend:latest
+docker push <ACCOUNT_ID>.dkr.ecr.ap-southeast-3.amazonaws.com/company-lens-frontend:latest
+```
+
+### Step 3: Create RDS PostgreSQL (with pgvector)
+
+Via AWS Console (ap-southeast-3):
+1. RDS → Create Database
+2. Engine: **PostgreSQL 16**
+3. Template: **Free tier** (or Dev/Test)
+4. Instance: `db.t3.micro` or `db.t3.small`
+5. DB name: `company_lens`
+6. Master username: `postgres`
+7. Master password: (save this!)
+8. VPC: Default VPC
+9. Public access: **Yes** (for initial setup, can restrict later)
+10. Create
+
+After creation, enable pgvector:
+```sql
+-- Connect via psql or pgAdmin
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+```
+
+### Step 4: Create ElastiCache Redis
+
+1. ElastiCache → Create
+2. Engine: **Redis OSS**
+3. Node type: `cache.t3.micro`
+4. Number of replicas: 0
+5. VPC: Same as RDS
+6. Create
+
+Note the **Primary endpoint** (e.g., `company-lens-redis.xxxxx.apse3.cache.amazonaws.com:6379`)
+
+### Step 5: Create ECS Cluster
+
+```bash
+aws ecs create-cluster --cluster-name company-lens --region ap-southeast-3
+```
+
+### Step 6: Create Task Definitions
+
+Create `task-backend.json`:
+```json
+{
+  "family": "company-lens-backend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "backend",
+      "image": "<ACCOUNT_ID>.dkr.ecr.ap-southeast-3.amazonaws.com/company-lens-backend:latest",
+      "portMappings": [{"containerPort": 8000}],
+      "environment": [
+        {"name": "SECRET_KEY", "value": "your-production-secret-key-here"},
+        {"name": "OPENAI_API_KEY", "value": "sk-your-key"},
+        {"name": "TAVILY_API_KEY", "value": "tvly-your-key"},
+        {"name": "DATABASE_URL", "value": "postgresql://postgres:PASSWORD@RDS_ENDPOINT:5432/company_lens"},
+        {"name": "REDIS_URL", "value": "redis://REDIS_ENDPOINT:6379/0"},
+        {"name": "ENVIRONMENT", "value": "production"},
+        {"name": "DEBUG", "value": "false"}
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/company-lens-backend",
+          "awslogs-region": "ap-southeast-3",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
+```
+
+Register:
+```bash
+aws ecs register-task-definition --cli-input-json file://task-backend.json --region ap-southeast-3
+```
+
+### Step 7: Create ALB + Target Groups
+
+Via Console:
+1. EC2 → Load Balancers → Create ALB
+2. Name: `company-lens-alb`
+3. Internet-facing, IPv4
+4. VPC: Default, select all subnets
+5. Security group: Allow HTTP (80) and HTTPS (443)
+6. Listeners: HTTP:80
+7. Target group: Create new → IP type, port 8000, health check `/api/docs`
+
+### Step 8: Create ECS Services
+
+```bash
+# Backend service
+aws ecs create-service \
+  --cluster company-lens \
+  --service-name backend \
+  --task-definition company-lens-backend \
+  --desired-count 1 \
+  --launch-type FARGATE \
+  --network-configuration "awsvpcConfiguration={subnets=[subnet-xxx],securityGroups=[sg-xxx],assignPublicIp=ENABLED}" \
+  --load-balancers "targetGroupArn=arn:aws:...,containerName=backend,containerPort=8000" \
   --region ap-southeast-3
-
-# Allow SSH, HTTP, HTTPS
-aws ec2 authorize-security-group-ingress --group-name company-lens-sg --protocol tcp --port 22 --cidr 0.0.0.0/0 --region ap-southeast-3
-aws ec2 authorize-security-group-ingress --group-name company-lens-sg --protocol tcp --port 80 --cidr 0.0.0.0/0 --region ap-southeast-3
-aws ec2 authorize-security-group-ingress --group-name company-lens-sg --protocol tcp --port 443 --cidr 0.0.0.0/0 --region ap-southeast-3
-aws ec2 authorize-security-group-ingress --group-name company-lens-sg --protocol tcp --port 3000 --cidr 0.0.0.0/0 --region ap-southeast-3
-aws ec2 authorize-security-group-ingress --group-name company-lens-sg --protocol tcp --port 8000 --cidr 0.0.0.0/0 --region ap-southeast-3
 ```
 
----
-
-## Step 3: Create Key Pair
+### Step 9: Run Migrations
 
 ```bash
-aws ec2 create-key-pair \
-  --key-name company-lens-key \
-  --query 'KeyMaterial' \
-  --output text \
-  --region ap-southeast-3 > ~/.ssh/company-lens-key.pem
-
-chmod 400 ~/.ssh/company-lens-key.pem
-```
-
----
-
-## Step 4: Launch EC2 Instance
-
-```bash
-# Find latest Ubuntu 22.04 AMI in Jakarta
-AMI_ID=$(aws ec2 describe-images \
-  --owners 099720109477 \
-  --filters "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" \
-  --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
-  --output text \
-  --region ap-southeast-3)
-
-echo "AMI: $AMI_ID"
-
-# Launch instance
-aws ec2 run-instances \
-  --image-id $AMI_ID \
-  --instance-type t3.small \
-  --key-name company-lens-key \
-  --security-groups company-lens-sg \
-  --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":30,"VolumeType":"gp3"}}]' \
-  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=company-lens}]' \
-  --region ap-southeast-3
-
-# Get public IP
-aws ec2 describe-instances \
-  --filters "Name=tag:Name,Values=company-lens" "Name=instance-state-name,Values=running" \
-  --query 'Reservations[0].Instances[0].PublicIpAddress' \
-  --output text \
+# One-time task to run migrations
+aws ecs run-task \
+  --cluster company-lens \
+  --task-definition company-lens-backend \
+  --launch-type FARGATE \
+  --network-configuration "awsvpcConfiguration={subnets=[subnet-xxx],securityGroups=[sg-xxx],assignPublicIp=ENABLED}" \
+  --overrides '{"containerOverrides":[{"name":"backend","command":["alembic","upgrade","head"]}]}' \
   --region ap-southeast-3
 ```
 
 ---
 
-## Step 5: SSH into the Instance and Set Up
+## Simpler Alternative: EC2 (Recommended for Hackathon)
+
+If ECS is too complex, use a single **EC2 instance** with Docker Compose:
+
+### Quick EC2 Deploy
 
 ```bash
-# SSH in (replace YOUR_IP with the public IP from step 4)
-ssh -i ~/.ssh/company-lens-key.pem ubuntu@YOUR_IP
-```
-
-Once inside the EC2 instance, run:
-
-```bash
-# Update system
-sudo apt update && sudo apt upgrade -y
-
-# Install Docker
-curl -fsSL https://get.docker.com -o get-docker.sh
-sudo sh get-docker.sh
+# 1. Launch EC2 (t3.small, Ubuntu 22.04, ap-southeast-3)
+# 2. SSH in and install Docker
+sudo apt update && sudo apt install -y docker.io docker-compose-v2
 sudo usermod -aG docker ubuntu
-newgrp docker
 
-# Install Docker Compose
-sudo apt install -y docker-compose-plugin
-
-# Install Node.js 18
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install -y nodejs
-
-# Install Python 3.11
-sudo apt install -y python3.11 python3.11-venv python3-pip
-
-# Clone the repo
+# 3. Clone your repo
 git clone https://github.com/akbarulazis/hackathon-company-lens.git
 cd hackathon-company-lens
 
-# Start PostgreSQL + Redis
-docker compose up -d db redis
-
-# Wait for DB to be ready
-sleep 10
-
-# Enable extensions
-docker compose exec db psql -U postgres -d company_lens -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm;"
-
-# Setup backend
-cd backend
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-
-# Create .env file (edit with your real keys)
-cat > .env << 'EOF'
-SECRET_KEY=your-production-secret-key-change-this
-OPENAI_API_KEY=sk-your-real-openai-key
-TAVILY_API_KEY=tvly-your-real-tavily-key
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/company_lens
-REDIS_URL=redis://localhost:6379/0
+# 4. Create production .env
+cat > backend/.env << 'EOF'
+SECRET_KEY=your-production-secret-32chars
+OPENAI_API_KEY=sk-your-key
+TAVILY_API_KEY=tvly-your-key
+DATABASE_URL=postgresql://postgres:postgres@db:5432/company_lens
+REDIS_URL=redis://redis:6379/0
 ENVIRONMENT=production
 DEBUG=false
 EOF
 
-# Run migrations
-alembic upgrade head
+# 5. Create production docker-compose
+cat > docker-compose.prod.yml << 'EOF'
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: company_lens
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
 
-# Setup frontend
-cd ../frontend
-npm install
-cat > .env.local << 'EOF'
-NEXT_PUBLIC_API_URL=/api
-NEXT_PUBLIC_WS_URL=ws://YOUR_IP:8000
-EOF
-npm run build
+  redis:
+    image: redis:7-alpine
+    restart: always
 
-# Start everything with PM2 (process manager)
-sudo npm install -g pm2
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    env_file: backend/.env
+    depends_on: [db, redis]
+    ports:
+      - "8000:8000"
+    restart: always
 
-# Start backend
-cd ../backend
-pm2 start "source .venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8000" --name backend
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: arq app.jobs.settings.WorkerSettings
+    env_file: backend/.env
+    depends_on: [db, redis]
+    restart: always
 
-# Start worker
-pm2 start "source .venv/bin/activate && arq app.jobs.settings.WorkerSettings" --name worker
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    environment:
+      - BACKEND_URL=http://backend:8000
+    ports:
+      - "80:3000"
+    depends_on: [backend]
+    restart: always
 
-# Start frontend
-cd ../frontend
-pm2 start "npm start" --name frontend
-
-# Save PM2 config
-pm2 save
-pm2 startup
-```
-
----
-
-## Step 6: Access Your App
-
-- Frontend: `http://YOUR_IP:3000`
-- API Docs: `http://YOUR_IP:8000/api/docs`
-
----
-
-## Optional: Nginx Reverse Proxy (single port 80)
-
-```bash
-sudo apt install -y nginx
-
-sudo cat > /etc/nginx/sites-available/company-lens << 'EOF'
-server {
-    listen 80;
-    server_name _;
-
-    location / {
-        proxy_pass http://localhost:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-    }
-
-    location /api {
-        proxy_pass http://localhost:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-    }
-}
+volumes:
+  postgres_data:
 EOF
 
-sudo ln -sf /etc/nginx/sites-available/company-lens /etc/nginx/sites-enabled/
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo nginx -t && sudo systemctl restart nginx
+# 6. Build and run
+docker compose -f docker-compose.prod.yml up -d --build
+
+# 7. Run migrations
+docker compose -f docker-compose.prod.yml exec backend alembic upgrade head
+
+# 8. Enable pgvector
+docker compose -f docker-compose.prod.yml exec db psql -U postgres -d company_lens -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm;"
 ```
 
-Now access at: `http://YOUR_IP` (port 80)
+Your app is now at `http://<EC2-PUBLIC-IP>` !
+
+### EC2 Security Group
+- Inbound: SSH (22), HTTP (80), HTTPS (443)
+- Outbound: All traffic
+
+### EC2 Instance Type Recommendation
+- **t3.small** (2 vCPU, 2GB RAM) — good for demo, ~$0.02/hr
+- **t3.medium** (2 vCPU, 4GB RAM) — better for multiple concurrent users
 
 ---
 
-## Troubleshooting
+## Cost Estimate (within $1000 budget)
 
-- **Can't connect**: Check security group allows your port
-- **Backend won't start**: Check .env has all required keys
-- **DB error**: Make sure Docker containers are running: `docker ps`
-- **Kill stuck process**: `pm2 delete all` then restart
-- **See logs**: `pm2 logs backend` or `pm2 logs worker`
+| Service | Monthly Cost |
+|---------|-------------|
+| EC2 t3.small (24/7) | ~$15 |
+| RDS db.t3.micro (if using managed) | ~$15 |
+| ElastiCache (if using managed) | ~$12 |
+| ECR storage | ~$1 |
+| ALB (if using) | ~$16 |
+| **Total (EC2 simple)** | **~$15/month** |
+| **Total (full managed)** | **~$60/month** |
+
+With $1000 credit, you have plenty of runway.
